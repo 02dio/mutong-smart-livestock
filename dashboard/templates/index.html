@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>牧瞳·猪场监测看板</title>
+    <!-- ECharts CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: '微软雅黑', 'Microsoft YaHei', sans-serif; background: #f0f2f5; color: #333; }
+        .header { background: #0b2b3d; color: white; padding: 12px 24px; font-size: 20px; font-weight: bold; letter-spacing: 1px; display: flex; justify-content: space-between; align-items: center; }
+        .container { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+        .card { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); padding: 16px; }
+        .card h3 { font-size: 16px; margin-bottom: 12px; color: #0b2b3d; border-left: 4px solid #0056b3; padding-left: 10px; }
+        .chart-box { width: 100%; height: 300px; }
+        .stats { display: flex; gap: 12px; margin-bottom: 16px; }
+        .stat-item { flex: 1; text-align: center; padding: 12px 8px; border-radius: 6px; background: #f8f9fa; }
+        .stat-value { font-size: 24px; font-weight: bold; color: #0056b3; }
+        .stat-label { font-size: 12px; color: #666; margin-top: 4px; }
+        .alerts { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+        .alert-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 4px; border: 1px solid #eee; }
+        .alert-dot { width: 12px; height: 12px; border-radius: 50%; }
+        .alert-dot.green { background: #52c41a; }
+        .alert-dot.yellow { background: #faad14; }
+        .alert-dot.red { background: #f5222d; }
+        .day-selector { display: flex; gap: 8px; align-items: center; }
+        .day-selector select { padding: 4px 12px; font-size: 14px; border-radius: 4px; border: 1px solid #ccc; }
+        .footer { text-align: center; padding: 12px; color: #999; font-size: 12px; }
+        .anomaly-tag { display: inline-block; background: #fff3e0; color: #e65100; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-left: 6px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <span>🐷 牧瞳·猪场多模态监测看板</span>
+        <div class="day-selector">
+            <label style="color:white; font-size:14px;">📅 选择日期：</label>
+            <select id="daySelect" onchange="loadDay()">
+                {% for d in days %}
+                <option value="{{ d }}">第{{ d }}天</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- 左侧：图表区 -->
+        <div>
+            <!-- 环境参数趋势 -->
+            <div class="card" style="margin-bottom:16px;">
+                <h3>📊 环境参数趋势（温度 / 氨气 / CO₂）</h3>
+                <div id="envChart" class="chart-box"></div>
+            </div>
+            <!-- 活动量柱状图 -->
+            <div class="card">
+                <h3>🐷 猪群活动量 + 异常标注</h3>
+                <div id="activityChart" class="chart-box"></div>
+            </div>
+        </div>
+
+        <!-- 右侧：数据统计 + 告警 -->
+        <div>
+            <!-- 数据统计卡片 -->
+            <div class="card" style="margin-bottom:16px;">
+                <h3>📋 当日概况</h3>
+                <div class="stats">
+                    <div class="stat-item">
+                        <div class="stat-value" id="avgTemp">-</div>
+                        <div class="stat-label">平均温度 (℃)</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="maxNh3">-</div>
+                        <div class="stat-label">最高氨气 (ppm)</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="avgActivity">-</div>
+                        <div class="stat-label">平均活动量</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 告警状态 -->
+            <div class="card">
+                <h3>⚠️ 告警状态</h3>
+                <div class="alerts" id="alertList">
+                    <div class="alert-item">
+                        <div class="alert-dot green"></div>
+                        <span>系统运行正常</span>
+                    </div>
+                </div>
+                <div id="anomalyInfo" style="margin-top:8px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">牧瞳 v1.0 | 数据来源：仿真模拟数据 | 2026年5月</div>
+
+    <script>
+        // ECharts实例
+        const envChart = echarts.init(document.getElementById('envChart'));
+        const activityChart = echarts.init(document.getElementById('activityChart'));
+
+        // 加载指定日期的数据
+        async function loadDay() {
+            const day = document.getElementById('daySelect').value;
+
+            // 获取详细数据
+            const dataResp = await fetch(`/api/data?day=${day}`);
+            const data = await dataResp.json();
+
+            // 获取摘要
+            const summaryResp = await fetch(`/api/summary?day=${day}`);
+            const summary = await summaryResp.json();
+
+            // 更新统计卡片
+            document.getElementById('avgTemp').textContent = summary.avg_temp;
+            document.getElementById('maxNh3').textContent = summary.max_nh3;
+            document.getElementById('avgActivity').textContent = summary.avg_activity;
+
+            // 更新告警状态
+            updateAlerts(summary);
+
+            // 绘制环境图表
+            drawEnvChart(data);
+
+            // 绘制活动量图表
+            drawActivityChart(data);
+        }
+
+        function updateAlerts(summary) {
+            const alertList = document.getElementById('alertList');
+            const anomalyInfo = document.getElementById('anomalyInfo');
+
+            if (summary.anomalies.length > 0) {
+                // 有异常
+                let html = '';
+                const types = summary.anomalies;
+                if (types.includes('低温应激')) {
+                    html += `<div class="alert-item"><div class="alert-dot red"></div><span>🔴 低温应激警告</span></div>`;
+                }
+                if (types.includes('氨气蓄积')) {
+                    html += `<div class="alert-item"><div class="alert-dot red"></div><span>🔴 氨气蓄积警告</span></div>`;
+                }
+                if (types.includes('疫病前兆')) {
+                    html += `<div class="alert-item"><div class="alert-dot red"></div><span>🔴 疫病前兆警告</span></div>`;
+                }
+                alertList.innerHTML = html;
+                anomalyInfo.innerHTML = `<span class="anomaly-tag">⚠ 检测到异常事件：${types.join('、')}</span>`;
+            } else {
+                alertList.innerHTML = `<div class="alert-item"><div class="alert-dot green"></div><span>✅ 系统运行正常，未检测到异常</span></div>`;
+                anomalyInfo.innerHTML = '';
+            }
+        }
+
+        function drawEnvChart(data) {
+            const option = {
+                tooltip: { trigger: 'axis' },
+                legend: { data: ['温度(℃)', '氨气(ppm)', 'CO₂(ppm)'], bottom: 0 },
+                grid: { left: 50, right: 60, top: 20, bottom: 30 },
+                xAxis: {
+                    type: 'category',
+                    data: data.timestamps,
+                    axisLabel: { interval: 60, rotate: 30, fontSize: 10 }
+                },
+                yAxis: [
+                    { type: 'value', name: '温度/氨气', min: 0 },
+                    { type: 'value', name: 'CO₂', min: 0 }
+                ],
+                series: [
+                    {
+                        name: '温度(℃)', type: 'line', data: data.temperature,
+                        smooth: true, lineStyle: { color: '#ff4d4f' },
+                        itemStyle: { color: '#ff4d4f' }
+                    },
+                    {
+                        name: '氨气(ppm)', type: 'line', data: data.nh3,
+                        smooth: true, lineStyle: { color: '#faad14' },
+                        itemStyle: { color: '#faad14' }
+                    },
+                    {
+                        name: 'CO₂(ppm)', type: 'line', yAxisIndex: 1,
+                        data: data.co2, smooth: true,
+                        lineStyle: { color: '#52c41a' },
+                        itemStyle: { color: '#52c41a' }
+                    }
+                ]
+            };
+            envChart.setOption(option);
+        }
+
+        function drawActivityChart(data) {
+            // 准备数据：找出异常时段用不同颜色
+            const normalData = [];
+            const anomalyData = [];
+
+            data.timestamps.forEach((t, i) => {
+                if (data.anomaly_label[i] !== '正常') {
+                    anomalyData.push({ value: data.activity[i], name: t });
+                    normalData.push(null);
+                } else {
+                    normalData.push({ value: data.activity[i], name: t });
+                    anomalyData.push(null);
+                }
+            });
+
+            const option = {
+                tooltip: { trigger: 'axis' },
+                legend: { data: ['正常活动量', '异常时段活动量'], bottom: 0 },
+                grid: { left: 50, right: 20, top: 20, bottom: 30 },
+                xAxis: {
+                    type: 'category',
+                    data: data.timestamps,
+                    axisLabel: { interval: 60, rotate: 30, fontSize: 10 }
+                },
+                yAxis: { type: 'value', name: '活动量', min: 0, max: 100 },
+                series: [
+                    {
+                        name: '正常活动量', type: 'bar', data: normalData,
+                        itemStyle: { color: '#0056b3' }
+                    },
+                    {
+                        name: '异常时段活动量', type: 'bar', data: anomalyData,
+                        itemStyle: { color: '#f5222d' }
+                    }
+                ]
+            };
+            activityChart.setOption(option);
+        }
+
+        // 页面加载时默认显示第一天
+        window.onload = () => loadDay();
+    </script>
+</body>
+</html>
